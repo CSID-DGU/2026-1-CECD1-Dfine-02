@@ -1,0 +1,16 @@
+# archetype_cluster.py — Tier 2 archetype 클러스터링 하이퍼파라미터
+# CLI 인자가 주어지면 해당 값을 override 한다.
+# SEED는 재현성 상수이므로 스크립트에 하드코딩 유지.
+
+[kmeans]
+k      = 5       # 클러스터 수 (Schwartz 5분위)
+n_init = 10      # 수렴 안정화 (sklearn 기본값)
+
+[pca]
+n_components = 100   # bootstrap ARI 0.954 최고 — docs/parameter_rationale.html §2
+
+[umap]
+n_components = 2
+n_neighbors  = 15
+min_dist     = 0.1
+metric       = "cosine"

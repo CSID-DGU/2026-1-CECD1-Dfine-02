@@ -1,0 +1,8 @@
+# anchor_match.py — 소비태그 Hungarian 자동 레이블링 하이퍼파라미터
+# CLI 인자가 주어지면 해당 값을 override 한다.
+# BGE-M3 모델/데이터셋 공통 설정은 루트 config.toml에서 별도 로드.
+
+[matching]
+k      = 5        # 클러스터 수
+margin = 0.05     # top-1 vs top-2 코사인 마진 임계 — 미만 시 low-conf 경고
+center = true     # BGE-M3 이방성 보정 (data_mean 차감, Li 2020 / Su 2021)
