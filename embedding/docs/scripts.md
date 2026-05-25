@@ -125,6 +125,39 @@ UUID 목록은 Step 1 parquet에서 읽으므로 **Step 1과 동일한 페르소
 
 ---
 
+## src/embed_consumption2.py — (독립) hobbies 항목별 임베딩
+
+### 역할
+
+`hobbies_and_interests_list` 칼럼의 **각 항목을 독립적으로** BGE-M3 1024-dim 임베딩한다.  
+`embed_consumption.py`(Step 2)와 달리 culinary를 제외하고, 리스트를 join하지 않고 원소별로 처리한다.  
+행마다 항목 수가 다르므로 출력 임베딩 길이가 가변적이다. 메인 파이프라인(main.py)에 포함되지 않는 독립 스크립트다.
+
+### 알고리즘
+
+```
+percol5 parquet에서 UUID 목록 로드
+HF 데이터셋 스캔 → UUID 매칭 → hobbies_and_interests_list 추출 (list 타입 유지)
+청크(50,000행) 내 모든 항목을 flat 배열로 묶어 BGE-M3 1회 encode (GPU 효율 극대화)
+UUID별로 재그룹 → list<fixed_size_list<float32>[1024]> 형식으로 저장
+항목 0개인 행 → 빈 리스트 []
+```
+
+### 주요 파라미터
+
+| 옵션 | 설명 | 기본값 |
+|------|------|--------|
+| `--sample` | 처리할 UUID 수 (percol5 기준) | 200,000 |
+| `--config` | 공용 config 경로 (BGE-M3·dataset) | `config.toml` |
+
+### 출력
+
+`resource/outputs/hobby_emb_n{N}.parquet`  
+스키마: `uuid (string)`, `embeddings (list<fixed_size_list<float32>[1024]>)`  
+— 행마다 임베딩 개수 = 해당 UUID의 hobbies 항목 수 (가변 길이)
+
+---
+
 ## src/archetype_cluster.py — Step 3: Tier 2 archetype 클러스터링
 
 ### 역할
