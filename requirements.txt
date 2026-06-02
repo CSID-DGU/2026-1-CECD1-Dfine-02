@@ -1,0 +1,19 @@
+# D-fine 멤버 C — 온라인 파이프라인 의존성
+# Python 3.13 기준. 설치: pip install -r requirements.txt
+
+# ── 핵심 (mock 백엔드로 파이프라인 돌리는 데 필요한 최소) ──
+numpy>=2.0
+python-dotenv>=1.0        # .env 로드 (없어도 코드가 ImportError 처리하지만 권장)
+
+# ── 실제 LLM 백엔드 (--backend openai) ──
+openai>=1.40
+
+# ── 다양성 평가(임베딩) + 맥락 멘토 ANN 검색 (선택) ──
+# 미설치 시 다양성은 self_bleu 폴백, 맥락 멘토는 random 폴백으로 동작
+sentence-transformers>=3.0
+faiss-cpu>=1.9            # py3.13 휠 없으면 numpy 브루트포스로 자동 폴백됨
+
+# ── 데이터 빌드 스크립트용 (build_faiss.py / build_consumption_meta.py) ──
+pandas>=2.0
+pyarrow>=15.0
+datasets>=2.0            # build_faiss.py가 Nemotron 원본 내려받을 때만

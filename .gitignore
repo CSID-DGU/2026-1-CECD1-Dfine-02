@@ -1,0 +1,28 @@
+# --- 비밀키 ---
+.env
+
+# --- 파이썬 캐시 ---
+__pycache__/
+*.pyc
+
+# --- 에디터/도구 ---
+.claude/
+.DS_Store
+
+# --- 시연 영상 제작용 (저장소 제외) ---
+_make_captions.py
+_overlay_filter.txt
+_caps/
+
+# --- 인수인계 문서 (저장소 제외) ---
+faiss_personaDB_인수인계.md
+진행보고_및_인수인계.md
+
+# --- 대용량 데이터 / 벡터 인덱스 (GitHub 용량 제한) ---
+# 생성/다운로드 방법은 README 참고
+nemotron_raw.parquet
+faiss_persona_meta.parquet
+faiss_consumption_meta.parquet
+data/mentor_cards.json
+data/mentor_index.faiss
+data/mentor_index_meta.json
