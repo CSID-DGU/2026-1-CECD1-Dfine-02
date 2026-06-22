@@ -25,6 +25,8 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+plt.rcParams["font.family"]      = "Noto Sans CJK KR"
+plt.rcParams["axes.unicode_minus"] = False
 import numpy as np
 import pandas as pd
 import pyarrow.dataset as pa_ds
@@ -41,33 +43,54 @@ ROOT      = Path(__file__).parent.parent
 OUT_DIR   = ROOT / "resource" / "outputs"
 SEED      = 42
 BOOT_FRAC = 0.5
+BOOT_MAX  = 200_000  # bootstrap 서브샘플 상한 (1M 입력 시 메모리 캡)
 
 
 # ── 데이터 로드 ────────────────────────────────────────────────────────────────
 
 def load_embeddings(embed_dir: Path, sample: int) -> tuple[list[str], np.ndarray]:
-    table     = pa_ds.dataset(embed_dir, format="parquet").to_table(
-                    columns=["uuid", "embedding"])
-    n_total   = len(table)
-    uuids_all = table.column("uuid").to_pylist()
-    flat      = (table.column("embedding").combine_chunks()
-                      .flatten().to_numpy(zero_copy_only=False))
-    del table; gc.collect()
-
-    dim = flat.size // n_total
-    arr = flat.reshape(n_total, dim).astype(np.float32)
-    del flat; gc.collect()
+    """스트리밍: 사전 결정 sample 인덱스 → 청크 순회하며 fp32 슬롯 채움."""
+    ds      = pa_ds.dataset(embed_dir, format="parquet")
+    n_total = ds.count_rows()
 
     if sample < n_total:
-        rng   = np.random.default_rng(SEED)
-        idx   = np.sort(rng.choice(n_total, size=sample, replace=False))
-        arr   = arr[idx].copy()
-        uuids = [uuids_all[i] for i in idx]
+        sample_pos = np.sort(
+            np.random.default_rng(SEED).choice(n_total, sample, replace=False))
     else:
-        uuids = uuids_all
+        sample_pos = np.arange(n_total)
+    n_sample = len(sample_pos)
 
-    print(f"[load] {len(uuids):,} × {dim}")
-    return uuids, arr
+    out: np.ndarray | None = None
+    uuids                   = [""] * n_sample
+    dim                     = -1
+    row_off                 = 0
+    BATCH                   = 20_000
+
+    for batch in ds.to_batches(columns=["uuid", "embedding"], batch_size=BATCH):
+        n_b = batch.num_rows
+        lo  = int(np.searchsorted(sample_pos, row_off,       side="left"))
+        hi  = int(np.searchsorted(sample_pos, row_off + n_b, side="left"))
+        if lo == hi:
+            row_off += n_b
+            continue
+        local_idx = sample_pos[lo:hi] - row_off
+        if out is None:
+            dim = batch.column("embedding").type.list_size
+            out = np.zeros((n_sample, dim), dtype=np.float32)
+        flat = (batch.column("embedding").flatten()
+                     .to_numpy(zero_copy_only=False))
+        out[lo:hi] = flat.reshape(n_b, dim)[local_idx].astype(np.float32)
+        batch_uids = batch.column("uuid").to_pylist()
+        for k, j in enumerate(local_idx):
+            uuids[lo + k] = batch_uids[int(j)]
+        row_off += n_b
+        del flat, batch_uids
+
+    if out is None:
+        raise RuntimeError(f"[load] 빈 dataset: {embed_dir}")
+    gc.collect()
+    print(f"[load] {n_sample:,} × {dim}")
+    return uuids, out
 
 
 # ── 전처리 ─────────────────────────────────────────────────────────────────────

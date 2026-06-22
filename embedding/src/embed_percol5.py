@@ -3,7 +3,7 @@ embed_percol5.py — percol5 BGE-M3 임베딩 생성  [파이프라인 Step 1]
 작성: 2026-05
 입력: nvidia/Nemotron-Personas-Korea (HF)  — config.toml n_bench 행
 출력: resource/embeddings_percol5/embeddings_percol5.parquet  (uuid, float16[5120])
-연산: 5 AIO 칼럼(career/professional/family/travel/hobbies) 각각 BGE-M3 dense 1024-dim
+연산: 5 가치 칼럼(career/family/travel/arts/cultural_background) 각각 BGE-M3 dense 1024-dim
      → column-wise concat → 5120-dim percol 임베딩
 
 비교 대상 (legacy/):
@@ -16,12 +16,12 @@ Usage:
 """
 
 import argparse
+import gc
 import sys
 import time
 import tomllib
 from pathlib import Path
 
-import pandas as pd
 import numpy as np
 import torch
 import pyarrow as pa
@@ -31,10 +31,10 @@ from FlagEmbedding import BGEM3FlagModel
 
 COLS: list[tuple[str, str]] = [
     ("career_goals_and_ambitions", "커리어 목표"),
-    ("professional_persona",       "직업적 자아"),
     ("family_persona",             "가족적 자아"),
     ("travel_persona",             "여행 성향"),
-    ("hobbies_and_interests",      "취미와 관심사"),
+    ("arts_persona",               "예술적 취향"),
+    ("cultural_background",        "문화적 배경"),
 ]
 
 EMBED_DIM = 1024
@@ -72,11 +72,11 @@ def _load_age_stratified(ds, n: int, seed: int) -> tuple[list[str], list[dict]]:
         if 50 <= a <= 69: return "50-69"
         return "other"
 
-    df["_band"] = df["age"].apply(age_band)
-    bands  = ["19-29", "30-49", "50-69"]
-    groups = {b: df[df["_band"] == b] for b in bands}
-    sizes  = {b: len(g) for b, g in groups.items()}
-    total  = sum(sizes.values())
+    bands    = ["19-29", "30-49", "50-69"]
+    band_vec = df["age"].apply(age_band).to_numpy()
+    band_idx = {b: np.where(band_vec == b)[0] for b in bands}
+    sizes    = {b: len(band_idx[b]) for b in bands}
+    total    = sum(sizes.values())
     if total < n:
         print(f"[warn]  19-69 합계 {total:,} < n_bench {n:,} — 전체 사용")
 
@@ -89,21 +89,25 @@ def _load_age_stratified(ds, n: int, seed: int) -> tuple[list[str], list[dict]]:
         allocations[b] = take
         remaining_n   -= take
 
-    samples = []
+    # pandas .sample(random_state=seed) 와 동치: RandomState(seed) per-band
+    sampled_idx_parts = []
     for b in bands:
-        k = allocations[b]
-        samples.append(groups[b].sample(n=k, random_state=seed))
+        k       = allocations[b]
+        rs      = np.random.RandomState(seed)
+        sampled_idx_parts.append(rs.choice(band_idx[b], size=k, replace=False))
         print(f"[load]   band {b}: {k:,} / {sizes[b]:,}")
 
-    df = (pd.concat(samples)
-            .drop(columns=["_band", "age"])
-            .reset_index(drop=True))
-    print(f"[load] age_stratified — {len(df):,} rows (target n={n:,})")
+    sampled_idx = np.concatenate(sampled_idx_parts)
+    print(f"[load] age_stratified — {len(sampled_idx):,} rows (target n={n:,})")
 
-    uuids, rows = [], []
-    for row in df.itertuples(index=False):
-        uuids.append(row.uuid)
-        rows.append({c: getattr(row, c) for c, _ in COLS})
+    # subset 만 추출 → 풀 df 즉시 해제 (peak ~3-5GB 감축)
+    uuids_arr = df["uuid"].to_numpy()[sampled_idx]
+    cols_arr  = {c: df[c].to_numpy()[sampled_idx] for c, _ in COLS}
+    del df, band_vec, band_idx
+    gc.collect()
+
+    uuids = uuids_arr.tolist()
+    rows  = [{c: cols_arr[c][i] for c, _ in COLS} for i in range(len(sampled_idx))]
     return uuids, rows
 
 

@@ -141,14 +141,18 @@ def embed_and_save(
             else:
                 flat_emb = np.empty((0, EMBED_DIM), dtype=np.float32)
 
-            # UUID별 재그룹 → list[list[list[float]]]
-            row_emb_lists = []
-            for s, e in row_slices:
-                row_emb_lists.append(flat_emb[s:e].tolist() if e > s else [])
+            # PyArrow native build: numpy buffer 그대로 FixedSizeListArray 로 래핑
+            # 후 ListArray.from_arrays(offsets, inner). Python list 변환 회피.
+            offsets      = np.array([0] + [e for _, e in row_slices], dtype=np.int32)
+            inner_values = pa.array(flat_emb.reshape(-1), type=pa.float32())
+            inner        = pa.FixedSizeListArray.from_arrays(inner_values, EMBED_DIM)
+            outer        = pa.ListArray.from_arrays(
+                pa.array(offsets, type=pa.int32()), inner,
+            )
 
             tbl = pa.table({
                 "uuid":       pa.array(chunk_uuids, type=pa.string()),
-                "embeddings": pa.array(row_emb_lists, type=emb_type),
+                "embeddings": outer,
             }, schema=schema)
             writer.write_table(tbl)
 

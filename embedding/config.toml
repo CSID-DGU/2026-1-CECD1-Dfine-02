@@ -1,0 +1,35 @@
+# config.toml — AIO 임베딩 파이프라인 설정
+# 계획서: AIO_임베딩_파이프라인_계획.md v2.2
+# 변경: bench.py 수정 없이 이 파일 값만 갱신하여 동작 조정.
+
+[model]
+name       = "BAAI/bge-m3"
+max_length = 2048         # 5컬럼 prefix concat에 충분 (이전 worst-case 8192 → 2048)
+batch_size   = 128        # GPU forward pass당 배치 크기 (VRAM 여유로 증가)
+encode_chunk = 8192       # encode() 1회 호출당 텍스트 수 — 토큰화 오버헤드 상각
+dtype      = "fp16"       # 정밀도 단일 제어. 옵션: bf16 | fp16 | fp32
+                          # 임베딩 추론은 fp16 — L2 정규화 벡터에서 bf16보다 mantissa 정밀도 높음
+
+[dataset]
+name      = "nvidia/Nemotron-Personas-Korea"
+seed      = 42
+cache_dir = ""            # 빈 문자열 → HF 기본 캐시 (~/.cache/huggingface). 별도 경로 시 절대 경로
+streaming = false         # 본 작업은 full download 필수 (strict shuffle / age stratify)
+
+[sampling]
+strategy = "full"            # 인구 연령분포 유지 — 전체 데이터 사용
+                          # "random"          — 전체에서 n_bench건 무작위 추출
+                          # "age_stratified"  — 19-29/30-49/50-69 밴드 평탄 추출, 한 밴드 미달 시 잔여 정원을 다른 밴드로 이월해 n_bench 도달
+
+[benchmark]
+n_bench        = 1000000  # 처리할 행 수 (코드 호환을 위해 키 이름 n_bench 유지)
+n_pilot        = 10000    # stage1 토큰 분포 추정용 (n_bench의 1%)
+warmup_batches = 2        # GPU 캐시 워밍업
+
+[output]
+parquet_dir = "resource/embeddings"
+chunk_size  = 1000000     # n_bench와 동일 → 단일 파일 생성
+compression = "zstd"      # zstd | snappy | none
+
+[runtime]
+device = "cuda:0"

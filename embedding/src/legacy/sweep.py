@@ -36,49 +36,78 @@ OUT_DIR = ROOT / "resource" / "outputs"
 
 SEED        = 42
 BATCH_SIZE  = 10_000
-BOOT_FRAC   = 0.5   # bootstrap 서브샘플 비율
+BOOT_FRAC   = 0.5      # bootstrap 서브샘플 비율
+BOOT_MAX    = 200_000  # bootstrap 서브샘플 상한 (메모리 캡)
+LOAD_BATCH  = 20_000   # parquet 스트리밍 청크 크기
 
 
 def load_embeddings(
     embed_dir: Path, sample: int | None = None
 ) -> tuple[list[str], np.ndarray]:
-    """parquet → numpy float32. sample 지정 시 float16 단계에서 슬라이스 (메모리 절약)."""
+    """parquet 청크 read → 샘플 행만 (sample, dim) fp32 슬롯 채움.
+
+    fp16 dtype 그대로 로드 → fp32 변환 없음 → RAM 절반.
+    sample=None 또는 sample>=n_total 이면 전체 사용.
+    """
     if not any(embed_dir.glob("*.parquet")):
         sys.exit(f"[load] 임베딩 없음: {embed_dir}")
 
-    table = pa_ds.dataset(embed_dir, format="parquet").to_table(columns=["uuid", "embedding"])
-    n_total = len(table)
-    uuids   = table.column("uuid").to_pylist()
-    # to_pandas() 금지: FixedSizeListArray → 1M Python numpy objects → 무한 메모리 성장
-    flat = table.column("embedding").combine_chunks().flatten().to_numpy(zero_copy_only=False)
-    del table
-    gc.collect()
-
-    dim     = flat.size // n_total
-    arr_f16 = flat.reshape(n_total, dim)
+    ds      = pa_ds.dataset(embed_dir, format="parquet")
+    n_total = ds.count_rows()
 
     if sample and sample < n_total:
-        rng     = np.random.default_rng(SEED)
-        idx     = np.sort(rng.choice(n_total, size=sample, replace=False))
-        arr_f16 = arr_f16[idx].copy()          # flat 뷰 분리 → del flat 가능
-        uuids   = [uuids[i] for i in idx]
-        del flat
-        gc.collect()
-        n = sample
+        sample_pos = np.sort(
+            np.random.default_rng(SEED).choice(n_total, sample, replace=False)
+        )
         print(f"[load] sample {sample:,} / {n_total:,}")
     else:
-        n = n_total
+        sample_pos = np.arange(n_total)
+    n_sample = len(sample_pos)
 
-    embeddings = arr_f16.astype(np.float32)
-    del arr_f16
+    out: np.ndarray | None = None
+    uuids                    = [""] * n_sample
+    dim                      = -1
+    row_off                  = 0
+
+    for batch in ds.to_batches(columns=["uuid", "embedding"], batch_size=LOAD_BATCH):
+        n_b = batch.num_rows
+        lo  = int(np.searchsorted(sample_pos, row_off,       side="left"))
+        hi  = int(np.searchsorted(sample_pos, row_off + n_b, side="left"))
+        if lo == hi:
+            row_off += n_b
+            continue
+
+        local_idx = sample_pos[lo:hi] - row_off
+        if out is None:
+            dim = batch.column("embedding").type.list_size
+            out = np.zeros((n_sample, dim), dtype=np.float16)
+
+        flat       = (batch.column("embedding").flatten()
+                           .to_numpy(zero_copy_only=False))
+        out[lo:hi] = flat.reshape(n_b, dim)[local_idx].astype(np.float16, copy=False)
+
+        batch_uids = batch.column("uuid").to_pylist()
+        for k, j in enumerate(local_idx):
+            uuids[lo + k] = batch_uids[int(j)]
+
+        row_off += n_b
+        del flat, batch_uids
+
+    if out is None:
+        raise RuntimeError(f"[load] 빈 dataset: {embed_dir}")
+
     gc.collect()
-    print(f"[load] {n:,} rows  dim={dim}")
-    return uuids, embeddings
+    print(f"[load] {n_sample:,} rows  dim={dim}")
+    return uuids, out
 
 
 def normalize(embeddings: np.ndarray) -> None:
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    embeddings /= np.clip(norms, 1e-10, None)
+    # fp16 배열: fp32로 업캐스트 후 정규화 계산 → 결과를 fp16으로 다시 저장
+    f32 = embeddings.astype(np.float32)
+    norms = np.linalg.norm(f32, axis=1, keepdims=True)
+    f32 /= np.clip(norms, 1e-10, None)
+    embeddings[:] = f32
+    del f32, norms
 
 
 def _cpu_labels_iter(
@@ -112,15 +141,24 @@ def _predict_once(x: np.ndarray, k: int, algo: str, device: str) -> np.ndarray:
 
 
 def _bootstrap_ari(x: np.ndarray, k: int, algo: str, device: str) -> float:
-    """50% 서브샘플 2회 클러스터링 → 공통 점들의 ARI."""
-    rng    = np.random.default_rng(SEED + 1)   # 데이터 로드 SEED와 분리
+    """서브샘플 2회 클러스터링 → 공통 점들의 ARI.
+
+    서브샘플 크기 = min(n * BOOT_FRAC, BOOT_MAX). 1M 입력 시 50% = 500k 가
+    fp32 5120-dim에서 ~10GB 임시 복사 두 개를 만드는 것을 방지.
+    """
+    rng    = np.random.default_rng(SEED + 1)
     n      = len(x)
-    m      = int(n * BOOT_FRAC)
+    m      = min(int(n * BOOT_FRAC), BOOT_MAX)
     idx_a  = np.sort(rng.choice(n, size=m, replace=False))
     idx_b  = np.sort(rng.choice(n, size=m, replace=False))
 
-    labels_a = _predict_once(x[idx_a], k, algo, device)
-    labels_b = _predict_once(x[idx_b], k, algo, device)
+    sub_a    = x[idx_a]
+    labels_a = _predict_once(sub_a, k, algo, device)
+    del sub_a; gc.collect()
+
+    sub_b    = x[idx_b]
+    labels_b = _predict_once(sub_b, k, algo, device)
+    del sub_b; gc.collect()
 
     _, ia, ib = np.intersect1d(idx_a, idx_b, return_indices=True)
     ari = adjusted_rand_score(labels_a[ia], labels_b[ib])
@@ -150,11 +188,14 @@ def sweep(
     results:    dict[int, dict]       = {}
     all_labels: dict[int, np.ndarray] = {}
     for k, labels, dt, inertia in it:
-        sil = silhouette_score(norm_emb, labels,
+        # fp16→fp32 임시 변환: sklearn 내부 float64 업캐스트 방지, 지표 계산 후 즉시 해제
+        _f32 = norm_emb.astype(np.float32)
+        sil = silhouette_score(_f32, labels,
                                sample_size=min(5_000, len(labels)),
                                random_state=SEED)
-        db  = davies_bouldin_score(norm_emb, labels)
-        ch  = calinski_harabasz_score(norm_emb, labels)
+        db  = davies_bouldin_score(_f32, labels)
+        ch  = calinski_harabasz_score(_f32, labels)
+        del _f32; gc.collect()
         all_labels[k] = labels.astype(np.int32, copy=False)
 
         ari = _bootstrap_ari(norm_emb, k, algo, device)
@@ -238,7 +279,8 @@ def main() -> None:
         "best_stability":  {"k": int(best_ari), "value": results[best_ari]["bootstrap_ari"]},
         "timestamp":       datetime.now().isoformat(timespec="seconds"),
     }
-    out_base = f"{args.algo}_{args.embed_dir.name}"
+    sample_tag = f"_n{args.sample}" if args.sample else ""
+    out_base = f"{args.algo}_{args.embed_dir.name}{sample_tag}"
     save(results, all_labels, uuids, meta, out_base)
 
 

@@ -28,6 +28,8 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+plt.rcParams["font.family"]      = "Noto Sans CJK KR"
+plt.rcParams["axes.unicode_minus"] = False
 import numpy as np
 import pandas as pd
 import pyarrow.dataset as pa_ds
@@ -59,23 +61,47 @@ DEFAULT_COMPONENTS = [2, 5, 10, 20, 30, 50]
 # ── 데이터 로드 ────────────────────────────────────────────────────────────────
 
 def load_embeddings(embed_dir: Path, sample: int) -> np.ndarray:
-    table   = pa_ds.dataset(embed_dir, format="parquet").to_table(
-                  columns=["uuid", "embedding"])
-    n_total = len(table)
-    flat    = (table.column("embedding").combine_chunks()
-                    .flatten().to_numpy(zero_copy_only=False))
-    del table; gc.collect()
+    """스트리밍: 사전 결정 sample 인덱스 → 청크 순회하며 fp32 슬롯 채움.
 
-    dim = flat.size // n_total
-    arr = flat.reshape(n_total, dim).astype(np.float32)
-    del flat; gc.collect()
+    풀 fp16(~10GB)+fp32(~20GB) 더블링 회피.
+    """
+    ds      = pa_ds.dataset(embed_dir, format="parquet")
+    n_total = ds.count_rows()
 
     if sample < n_total:
-        idx = np.random.default_rng(SEED).choice(n_total, size=sample, replace=False)
-        arr = arr[np.sort(idx)].copy()
+        sample_pos = np.sort(
+            np.random.default_rng(SEED).choice(n_total, sample, replace=False))
+    else:
+        sample_pos = np.arange(n_total)
+    n_sample = len(sample_pos)
 
-    print(f"[load] {len(arr):,} × {dim}")
-    return arr
+    out: np.ndarray | None = None
+    dim     = -1
+    row_off = 0
+    BATCH   = 20_000
+
+    for batch in ds.to_batches(columns=["embedding"], batch_size=BATCH):
+        n_b = batch.num_rows
+        lo  = int(np.searchsorted(sample_pos, row_off,       side="left"))
+        hi  = int(np.searchsorted(sample_pos, row_off + n_b, side="left"))
+        if lo == hi:
+            row_off += n_b
+            continue
+        local_idx = sample_pos[lo:hi] - row_off
+        if out is None:
+            dim = batch.column("embedding").type.list_size
+            out = np.zeros((n_sample, dim), dtype=np.float32)
+        flat = (batch.column("embedding").flatten()
+                     .to_numpy(zero_copy_only=False))
+        out[lo:hi] = flat.reshape(n_b, dim)[local_idx].astype(np.float32)
+        row_off += n_b
+        del flat
+
+    if out is None:
+        raise RuntimeError(f"[load] 빈 dataset: {embed_dir}")
+    gc.collect()
+    print(f"[load] {n_sample:,} × {dim}")
+    return out
 
 
 # ── 전처리 ─────────────────────────────────────────────────────────────────────

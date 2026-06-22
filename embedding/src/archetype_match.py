@@ -8,12 +8,12 @@ archetype_match.py — archetype Hungarian 자동 레이블링  [파이프라인
       resource/outputs/archetype_mapping_n{N}.json          — cluster_id → 레이블 매핑
       resource/outputs/archetype_sim_n{N}.csv               — 5×5 코사인 유사도 행렬
 연산:
-  1. percol5 5120-dim centroid (cluster별 평균) - data_mean → L2 정규화
+  1. percol5 청크 read → cluster별 centroid + data_mean 직접 누적 (fp64)
   2. anchor 텍스트 BGE-M3 percol (5 AIO 칼럼) - data_mean → L2
   3. 코사인 유사도 (5 anchor × 5 cluster)
   4. scipy linear_sum_assignment (Hungarian) → 최대 합 1:1 매핑
   data_mean 차감은 BGE-M3 이방성 보정 (Li 2020, Su 2021)
-  percol5 해제 후 BGE-M3 로드 — 메모리 순차 확보
+  풀 임베딩 (N×5120 fp32) 적재 회피 — 청크 단위 누적으로 메모리 < 1GB
 
 Usage:
     uv run src/archetype_match.py
@@ -75,37 +75,72 @@ def encode(model, texts: list[str], cfg: dict) -> np.ndarray:
     return np.asarray(out["dense_vecs"], dtype=np.float32)
 
 
-# ── percol5 로드 ────────────────────────────────────────────────────────────────
+# ── percol5 청크 누적 ───────────────────────────────────────────────────────────
 
-def load_percol5_subset(uuids: list[str]) -> np.ndarray:
-    """percol5 parquet에서 uuid 순서대로 (N, 5120) float32 추출."""
-    print(f"[percol5] loading {EMBED_DIR} ...")
-    table    = pa_ds.dataset(EMBED_DIR, format="parquet").to_table(
-                   columns=["uuid", "embedding"])
-    n_total  = len(table)
-    all_uids = table.column("uuid").to_pylist()
-    flat     = (table.column("embedding").combine_chunks()
-                     .flatten().to_numpy(zero_copy_only=False))
-    del table; gc.collect()
+def stream_centroids(
+    uuids: list[str], cluster: np.ndarray, k: int, center: bool,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """percol5 parquet 청크 read → cluster별 centroid + 전체 평균 (fp64 누적).
 
-    dim = flat.size // n_total
-    arr = flat.reshape(n_total, dim).astype(np.float32)  # float16 → float32
-    del flat; gc.collect()
+    풀 (N, 5120) fp32 적재를 피하고 청크당 fp64 sum 만 누적한다.
+    centroid 는 (sum_c / count_c), data_mean 은 (sum_all / n_kept) 로 산출 —
+    원본 `emb[mask].mean()` 과 수학적으로 동일.
+    """
+    print(f"[percol5] streaming {EMBED_DIR} (chunked) ...")
+    uuid_to_pos = {u: i for i, u in enumerate(uuids)}
+    n_subset    = len(uuids)
 
-    idx = {u: i for i, u in enumerate(all_uids)}
-    missing = [u for u in uuids if u not in idx]
-    if missing:
+    BATCH    = 20_000
+    ds       = pa_ds.dataset(EMBED_DIR, format="parquet")
+    sum_c:   np.ndarray | None = None   # (k, dim) fp64
+    count_c                     = np.zeros(k, dtype=np.int64)
+    sum_all: np.ndarray | None = None   # (dim,) fp64
+    n_seen                      = 0
+
+    for batch in ds.to_batches(columns=["uuid", "embedding"], batch_size=BATCH):
+        batch_uids = batch.column("uuid").to_pylist()
+        n_b        = len(batch_uids)
+
+        kept_local: list[int] = []
+        kept_cls:   list[int] = []
+        for j, u in enumerate(batch_uids):
+            i = uuid_to_pos.get(u)
+            if i is not None:
+                kept_local.append(j)
+                kept_cls.append(int(cluster[i]))
+        if not kept_local:
+            continue
+
+        flat = (batch.column("embedding").flatten()
+                     .to_numpy(zero_copy_only=False))
+        dim  = flat.size // n_b
+        if sum_c is None:
+            sum_c   = np.zeros((k, dim), dtype=np.float64)
+            sum_all = np.zeros(dim,      dtype=np.float64)
+
+        emb_kept = flat.reshape(n_b, dim)[kept_local].astype(np.float64)
+        cls_arr  = np.asarray(kept_cls)
+        for c in range(k):
+            m = cls_arr == c
+            if m.any():
+                sum_c[c]   += emb_kept[m].sum(axis=0)
+                count_c[c] += int(m.sum())
+        if center:
+            sum_all += emb_kept.sum(axis=0)
+        n_seen += len(emb_kept)
+
+    if sum_c is None:
         raise RuntimeError(
-            f"{len(missing)} uuid가 percol5에 없음 — Step 1(embed_percol5.py) 먼저 실행하세요"
+            "percol5 에서 subset 매칭 행 0개 — Step 1(embed_percol5.py) 먼저 실행하세요"
         )
+    if n_seen < n_subset:
+        print(f"[warn] subset {n_subset:,} 중 {n_subset - n_seen:,}개 percol5에 없음")
 
-    out = np.zeros((len(uuids), dim), dtype=np.float32)
-    for i, u in enumerate(uuids):
-        out[i] = arr[idx[u]]
-    del arr; gc.collect()
-
-    print(f"[percol5] subset {out.shape}")
-    return out
+    centroids = (sum_c / np.maximum(count_c[:, None], 1)).astype(np.float32)
+    data_mean = ((sum_all / max(n_seen, 1)).astype(np.float32)
+                 if center else None)
+    print(f"[percol5] centroids {centroids.shape} (n_kept={n_seen:,})")
+    return centroids, data_mean
 
 
 # ── anchor 임베딩 ──────────────────────────────────────────────────────────────
@@ -120,21 +155,6 @@ def embed_anchors(model, cfg: dict) -> np.ndarray:
 
 
 # ── 매칭 ───────────────────────────────────────────────────────────────────────
-
-def cluster_centroids(
-    emb: np.ndarray, labels: np.ndarray, k: int,
-    subtract: np.ndarray | None = None,
-) -> np.ndarray:
-    """(k, dim) 평균 [- subtract] → L2 정규화"""
-    centroids = np.zeros((k, emb.shape[1]), dtype=np.float32)
-    for c in range(k):
-        mask = labels == c
-        if mask.any():
-            centroids[c] = emb[mask].mean(axis=0)
-    if subtract is not None:
-        centroids = centroids - subtract
-    return l2_norm(centroids)
-
 
 def hungarian_assign(sim: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     cost = 1.0 - sim
@@ -178,20 +198,18 @@ def main() -> None:
     uuids   = df["uuid"].tolist()
     cluster = df["archetype"].to_numpy()
 
-    # 2. percol5 임베딩 로드
-    emb = load_percol5_subset(uuids)
-
-    # 3. 데이터 평균 (이방성 보정용)
-    data_mean = emb.mean(axis=0).astype(np.float32) if args.center else None
+    # 2. percol5 청크 read → centroid + data_mean 직접 누적
+    centroids, data_mean = stream_centroids(uuids, cluster, args.k, args.center)
     if args.center:
         print(f"[center]    data_mean ||·||={np.linalg.norm(data_mean):.4f}")
 
-    # 4. 클러스터 centroid — percol5 해제 전에 계산
-    centroids = cluster_centroids(emb, cluster, args.k, subtract=data_mean)
+    # 3. 평균 차감 + L2 정규화
+    if data_mean is not None:
+        centroids = centroids - data_mean
+    centroids = l2_norm(centroids)
     print(f"[centroids] {centroids.shape}")
-    del emb; gc.collect()
 
-    # 5. anchor 임베딩 (percol5 해제 후 BGE-M3 로드)
+    # 4. anchor 임베딩
     cfg         = load_cfg(args.config)
     model       = load_model(cfg)
     anchors_raw = embed_anchors(model, cfg)
@@ -203,14 +221,14 @@ def main() -> None:
     anchors = l2_norm(anchors_raw)
     print(f"[anchors]   {anchors.shape}")
 
-    # 6. 코사인 유사도
+    # 5. 코사인 유사도
     sim = anchors @ centroids.T  # (5, 5)
     print_sim_matrix(sim, args.k)
 
-    # 7. Hungarian
+    # 6. Hungarian
     a_idx, c_idx = hungarian_assign(sim)
 
-    # 8. 매핑 + low-confidence
+    # 7. 매핑 + low-confidence
     print(f"\n[mapping]  (margin threshold = {args.margin:.3f})")
     print("  " + "─" * 60)
     mapping: dict[int, str] = {}
@@ -226,7 +244,7 @@ def main() -> None:
         print(f"  cluster {ci} → {label:14s}  cos={s:+.4f}  margin={margin:.4f}{flag}")
         mapping[int(ci)] = label
 
-    # 9. 저장
+    # 8. 저장
     df["archetype_label"] = df["archetype"].map(mapping)
     out_csv = OUT_DIR / f"archetype_labeled_n{args.sample}.csv"
     df.to_csv(out_csv, index=False)

@@ -4,8 +4,8 @@ main.py — AIO 페르소나 분류 파이프라인 오케스트레이터
 입력: nvidia/Nemotron-Personas-Korea (HuggingFace, config.toml 경유)
 출력: resource/outputs/consumption_tags_labeled_n{N}.csv  (uuid + archetype_label + consumption_label)
 연산: 7단계 순차 실행
-  Step 1  percol5 임베딩            — BGE-M3 5칼럼 → 5120-dim parquet
-  Step 2  소비 임베딩               — BGE-M3 culinary+hobbies → 2048-dim parquet
+  Step 1  percol5 임베딩            — BGE-M3 5칼럼 → 5120-dim fp16 parquet
+  Step 2  소비 임베딩               — BGE-M3 culinary+hobbies → 2048-dim fp16 parquet
   Step 3  archetype 클러스터링      — percol5 → KMeans → archetype_n{N}.csv
   Step 4  소비태그 클러스터링       — 소비 임베딩 → KMeans → consumption_cluster_n{N}.csv
   Step 5  소비태그 레이블링         — Hungarian anchor 매칭

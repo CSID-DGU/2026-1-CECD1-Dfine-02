@@ -20,6 +20,8 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+plt.rcParams["font.family"]      = "Noto Sans CJK KR"
+plt.rcParams["axes.unicode_minus"] = False
 import numpy as np
 import pandas as pd
 import pyarrow.dataset as pa_ds
@@ -31,30 +33,62 @@ SEED = 42
 
 
 def load_aligned(embed_dir: Path, uuids: list[str]) -> np.ndarray:
-    """uuid 순서에 맞춘 정규화된 embeddings 배열."""
+    """uuid 순서에 맞춘 정규화된 embeddings 배열.
+
+    스트리밍: uuid → 원본 행 인덱스 dict 1회 빌드 → 청크 순회 시 해당 행만 fp32로 슬롯 채움.
+    풀 fp16(~10GB)+fp32(~10GB) 더블링 회피.
+    """
     if not any(embed_dir.glob("*.parquet")):
         sys.exit(f"[load] 임베딩 없음: {embed_dir}")
 
-    table = pa_ds.dataset(embed_dir, format="parquet").to_table(columns=["uuid", "embedding"])
-    all_uuids = table.column("uuid").to_pylist()
-    flat = table.column("embedding").combine_chunks().flatten().to_numpy(zero_copy_only=False)
-    del table
-    gc.collect()
+    ds        = pa_ds.dataset(embed_dir, format="parquet")
+    all_uuids = ds.to_table(columns=["uuid"]).column("uuid").to_pylist()
+    uuid2pos  = {u: i for i, u in enumerate(all_uuids)}
+    del all_uuids; gc.collect()
 
-    n_total = len(all_uuids)
-    dim     = flat.size // n_total
-    arr_f16 = flat.reshape(n_total, dim)
+    target_pos   = np.fromiter((uuid2pos[u] for u in uuids),
+                               dtype=np.int64, count=len(uuids))
+    del uuid2pos; gc.collect()
 
-    uuid_to_idx = {u: i for i, u in enumerate(all_uuids)}
-    sel = np.fromiter((uuid_to_idx[u] for u in uuids), dtype=np.int64, count=len(uuids))
-    embeddings = arr_f16[sel].astype(np.float32)
-    del flat, arr_f16
-    gc.collect()
+    sorted_ord = np.argsort(target_pos)        # 출력 슬롯 인덱스
+    sorted_pos = target_pos[sorted_ord]         # 정렬된 원본 위치
 
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    embeddings /= np.clip(norms, 1e-10, None)
-    print(f"[load] {len(embeddings):,} × {dim}  (정규화 완료)")
-    return embeddings
+    T   = len(uuids)
+    out: np.ndarray | None = None
+    dim = -1
+    row_off = 0
+    BATCH   = 20_000
+
+    for batch in ds.to_batches(columns=["embedding"], batch_size=BATCH):
+        n_b = batch.num_rows
+        lo  = int(np.searchsorted(sorted_pos, row_off,       side="left"))
+        hi  = int(np.searchsorted(sorted_pos, row_off + n_b, side="left"))
+        if lo == hi:
+            row_off += n_b
+            continue
+
+        local_pos    = sorted_pos[lo:hi] - row_off
+        target_slots = sorted_ord[lo:hi]
+        if out is None:
+            dim = batch.column("embedding").type.list_size
+            out = np.zeros((T, dim), dtype=np.float16)
+
+        flat = (batch.column("embedding").flatten()
+                     .to_numpy(zero_copy_only=False))
+        out[target_slots] = flat.reshape(n_b, dim)[local_pos].astype(np.float16, copy=False)
+        row_off += n_b
+        del flat
+
+    if out is None:
+        raise RuntimeError(f"[load] 빈 dataset: {embed_dir}")
+
+    f32 = out.astype(np.float32)
+    norms = np.linalg.norm(f32, axis=1, keepdims=True)
+    f32 /= np.clip(norms, 1e-10, None)
+    out[:] = f32
+    del f32, norms; gc.collect()
+    print(f"[load] {T:,} × {dim}  (정규화 완료)")
+    return out
 
 
 def project(embeddings: np.ndarray) -> np.ndarray:
@@ -66,7 +100,7 @@ def project(embeddings: np.ndarray) -> np.ndarray:
     )
     coords = reducer.fit_transform(embeddings)
     print(f"[umap] done")
-    return coords.astype(np.float32)
+    return coords.astype(np.float16)
 
 
 def plot(coords: np.ndarray, labels_df: pd.DataFrame,
@@ -130,8 +164,8 @@ def main() -> None:
         gc.collect()
         pd.DataFrame({
             "uuid": labels_df["uuid"].values,
-            "x":    coords[:, 0],
-            "y":    coords[:, 1],
+            "x":    coords[:, 0].astype(np.float16),
+            "y":    coords[:, 1].astype(np.float16),
         }).to_parquet(umap_path, index=False)
         print(f"[save] {umap_path}")
 

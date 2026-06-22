@@ -3,7 +3,7 @@ embed_consumption.py — 소비 임베딩 생성  [파이프라인 Step 2]
 작성: 2026-05
 입력: resource/embeddings_percol5/embeddings_percol5.parquet  (UUID 기준)
       nvidia/Nemotron-Personas-Korea (culinary_persona, hobbies_and_interests_list)
-출력: resource/outputs/consumption_emb_n{N}.parquet  (uuid + float32[2048])
+출력: resource/outputs/consumption_emb_n{N}.parquet  (uuid + float16[2048])
 연산: culinary_persona + hobbies_and_interests_list 각각 BGE-M3 1024-dim → concat → 2048-dim
 
 Usage:
@@ -94,7 +94,7 @@ def embed_and_save(
 
     schema = pa.schema([
         ("uuid",      pa.string()),
-        ("embedding", pa.list_(pa.float32(), EMBED_DIM)),
+        ("embedding", pa.list_(pa.float16(), EMBED_DIM)),
     ])
 
     CHUNK = 50_000
@@ -113,15 +113,15 @@ def embed_and_save(
                 out = model.encode(col_texts, batch_size=bs, max_length=ml,
                                    return_dense=True, return_sparse=False,
                                    return_colbert_vecs=False)
-                col_vecs.append(np.asarray(out["dense_vecs"], dtype=np.float32))
+                col_vecs.append(np.asarray(out["dense_vecs"], dtype=np.float16))
 
-            combined = np.concatenate(col_vecs, axis=1)  # (chunk, 2048)
+            combined = np.concatenate(col_vecs, axis=1)  # (chunk, 2048) fp16
             flat     = combined.reshape(-1)
 
             tbl = pa.table({
                 "uuid": pa.array(chunk_uuids, type=pa.string()),
                 "embedding": pa.FixedSizeListArray.from_arrays(
-                    pa.array(flat, type=pa.float32()), EMBED_DIM,
+                    pa.array(flat, type=pa.float16()), EMBED_DIM,
                 ),
             }, schema=schema)
             writer.write_table(tbl)

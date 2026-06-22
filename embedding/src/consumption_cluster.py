@@ -49,25 +49,51 @@ def umap2d(x: np.ndarray, umap_cfg: dict) -> np.ndarray:
         min_dist     = umap_cfg["min_dist"],
         metric       = umap_cfg["metric"],
         random_state = SEED,
+        low_memory   = True,
     ).fit_transform(x)
     print(f"  done {time.perf_counter()-t0:.1f}s")
     return out.astype(np.float32)
 
 
 def load_consumption_emb(sample: int) -> tuple[list[str], np.ndarray]:
+    """consumption_emb parquet 청크 read → (N, dim) fp32.
+
+    원본은 풀 to_table → flat 버퍼(fp16) → arr(fp32) 캐스트로 fp16+fp32 동시
+    보관(~12GB @ N=1M). 여기서는 청크 batch 임시만 두고 단일 fp32 슬롯 채움.
+    """
     path = OUT_DIR / f"consumption_emb_n{sample}.parquet"
     if not path.exists():
         sys.exit(f"[error] 소비 임베딩 캐시 없음: {path}\n"
                  f"        먼저 Step 2 실행: uv run main.py --step 2 --sample {sample}")
-    table = pa_ds.dataset(str(path), format="parquet").to_table(columns=["uuid", "embedding"])
-    uuids = table.column("uuid").to_pylist()
-    flat  = (table.column("embedding").combine_chunks()
-                  .flatten().to_numpy(zero_copy_only=False))
-    del table; gc.collect()
-    dim = flat.size // len(uuids)
-    arr = flat.reshape(len(uuids), dim).astype(np.float32)
-    del flat; gc.collect()
-    print(f"[cons_emb] {len(uuids):,} × {dim}")
+
+    ds      = pa_ds.dataset(str(path), format="parquet")
+    n_total = ds.count_rows()
+
+    arr:   np.ndarray | None = None
+    uuids                     = [""] * n_total
+    dim                       = -1
+    row_off                   = 0
+    BATCH                     = 20_000
+
+    for batch in ds.to_batches(columns=["uuid", "embedding"], batch_size=BATCH):
+        n_b = batch.num_rows
+        if arr is None:
+            dim = batch.column("embedding").type.list_size
+            arr = np.zeros((n_total, dim), dtype=np.float32)
+
+        flat = (batch.column("embedding").flatten()
+                     .to_numpy(zero_copy_only=False))
+        arr[row_off:row_off + n_b] = flat.reshape(n_b, dim).astype(np.float32)
+
+        batch_uids = batch.column("uuid").to_pylist()
+        for k, u in enumerate(batch_uids):
+            uuids[row_off + k] = u
+        row_off += n_b
+
+    if arr is None:
+        raise RuntimeError("consumption_emb dataset empty")
+
+    print(f"[cons_emb] {n_total:,} × {dim}")
     return uuids, arr
 
 
