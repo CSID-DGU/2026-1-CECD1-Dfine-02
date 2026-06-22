@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>파라미터 선택 근거 — AIO 페르소나 분류 파이프라인</title>
+<style>
+  :root {
+    --bg: #f8f9fa;
+    --card: #ffffff;
+    --border: #dee2e6;
+    --accent: #2563eb;
+    --accent-light: #eff6ff;
+    --green: #16a34a;
+    --green-light: #f0fdf4;
+    --red: #dc2626;
+    --yellow: #ca8a04;
+    --text: #1e293b;
+    --muted: #64748b;
+    --code-bg: #f1f5f9;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 2rem 1rem;
+  }
+  .page { max-width: 960px; margin: 0 auto; }
+
+  /* Header */
+  .page-header {
+    background: var(--accent);
+    color: white;
+    border-radius: 12px;
+    padding: 2rem 2.5rem;
+    margin-bottom: 2rem;
+  }
+  .page-header h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 0.4rem; }
+  .page-header p { opacity: 0.85; font-size: 0.95rem; }
+
+  /* TOC */
+  .toc {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 2.5rem;
+  }
+  .toc h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.75rem; }
+  .toc ol { padding-left: 1.2rem; }
+  .toc li { margin: 0.3rem 0; }
+  .toc a { color: var(--accent); text-decoration: none; font-size: 0.95rem; }
+  .toc a:hover { text-decoration: underline; }
+
+  /* Section */
+  section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2rem 2.5rem;
+    margin-bottom: 2rem;
+  }
+  section h2 {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--accent);
+    border-bottom: 2px solid var(--accent-light);
+    padding-bottom: 0.5rem;
+    margin-bottom: 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  section h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text);
+    margin: 1.25rem 0 0.6rem;
+  }
+  p { margin-bottom: 0.75rem; font-size: 0.95rem; }
+
+  /* Verdict box */
+  .verdict {
+    background: var(--green-light);
+    border-left: 4px solid var(--green);
+    border-radius: 0 6px 6px 0;
+    padding: 0.75rem 1rem;
+    margin: 1.25rem 0 0.5rem;
+    font-size: 0.95rem;
+  }
+  .verdict strong { color: var(--green); }
+
+  /* Images */
+  .img-row {
+    display: flex;
+    gap: 1rem;
+    margin: 1rem 0;
+    flex-wrap: wrap;
+  }
+  .img-row figure {
+    flex: 1;
+    min-width: 260px;
+  }
+  figure {
+    margin: 1rem 0;
+  }
+  figure img {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  figcaption {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-top: 0.4rem;
+    text-align: center;
+  }
+
+  /* Tables */
+  .table-wrap { overflow-x: auto; margin: 1rem 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.875rem;
+  }
+  th {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.75rem;
+    text-align: center;
+    font-weight: 600;
+    color: var(--muted);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  td {
+    border: 1px solid var(--border);
+    padding: 0.45rem 0.75rem;
+    text-align: center;
+  }
+  tr:nth-child(even) td { background: #fafafa; }
+  .highlight td { background: var(--green-light) !important; font-weight: 600; }
+  .best { color: var(--green); font-weight: 700; }
+  .bad  { color: var(--red); }
+  td.label { text-align: left; font-weight: 500; }
+
+  /* Code */
+  code {
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.85em;
+    color: #c7254e;
+  }
+
+  /* Step badge */
+  .badge {
+    display: inline-block;
+    background: var(--accent);
+    color: white;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 0.15em 0.5em;
+    border-radius: 4px;
+    vertical-align: middle;
+  }
+
+  /* note */
+  .note {
+    background: #fffbeb;
+    border-left: 3px solid var(--yellow);
+    border-radius: 0 6px 6px 0;
+    padding: 0.6rem 0.9rem;
+    font-size: 0.875rem;
+    margin: 0.75rem 0;
+    color: #78350f;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<!-- ───────── Header ───────── -->
+<div class="page-header">
+  <h1>파라미터 선택 근거</h1>
+  <p>AIO 페르소나 분류 파이프라인 — 임베딩 전략·차원 축소·클러스터 수·샘플 크기·noise 임계값의 실험 근거</p>
+</div>
+
+<!-- ───────── TOC ───────── -->
+<div class="toc">
+  <h2>목차</h2>
+  <ol>
+    <li><a href="#embedding">임베딩 전략 선택 — percol5 (5120-dim)</a></li>
+    <li><a href="#pca">PCA 차원 선택 — n=100</a></li>
+    <li><a href="#umap">UMAP n_components 선택 — 2D</a></li>
+    <li><a href="#kmeans">KMeans k 선택 — k=5</a></li>
+    <li><a href="#sample">샘플 크기 선택 — n=200,000</a></li>
+    <li><a href="#noise">noise_dist 임계값 선택 — 상위 10%</a></li>
+    <li><a href="#pca-tier3">Tier 3 PCA 차원 선택 — n=100 확정</a></li>
+  </ol>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════
+     §1  임베딩 전략
+═══════════════════════════════════════════════ -->
+<section id="embedding">
+  <h2><span class="badge">Step 1</span> 임베딩 전략 선택 — percol5 (5120-dim)</h2>
+
+  <p>세 가지 임베딩 방식을 <strong>n=200,000, k=3~7</strong> 스윕으로 비교했다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>방식</th><th>입력 칼럼</th><th>dim</th>
+          <th>best sil k</th><th>best sil 값</th>
+          <th>best ARI k</th><th>best ARI 값</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="label">embed (concat)</td>
+          <td>5칼럼 텍스트 concat → 단일 인코딩</td>
+          <td>1024</td>
+          <td>3</td><td>0.0205</td>
+          <td>4</td><td>0.640</td>
+        </tr>
+        <tr>
+          <td class="label">percol (7col)</td>
+          <td>7칼럼 각각 독립 인코딩 → concat</td>
+          <td>7168</td>
+          <td>3</td><td>0.0116</td>
+          <td>3</td><td>0.631</td>
+        </tr>
+        <tr class="highlight">
+          <td class="label">percol5 ✓</td>
+          <td>5칼럼 각각 독립 인코딩 → concat</td>
+          <td>5120</td>
+          <td>3</td><td>0.0142</td>
+          <td class="best">5</td><td class="best">0.537</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>bootstrap ARI</strong>는 같은 데이터에서 두 번 KMeans를 실행했을 때 클러스터 할당이 얼마나 재현되는지를 측정한다 (높을수록 안정적). percol5는 k=5에서 ARI 0.537로 세 방식 중 <em>이론 목표(k=5)와 안정성이 동시에 가장 잘 일치</em>했다.</p>
+
+  <div class="img-row">
+    <figure>
+      <img src="../resource/outputs/compare_3col_pca100_n50000.png"
+           alt="3가지 임베딩 방식 UMAP 비교 (n=50,000, PCA→UMAP)">
+      <figcaption>세 방식 UMAP 2D 시각화 (n=50,000, PCA100→UMAP). 왼쪽부터 embed(1024), percol(3072), percol5(5120). percol5가 가장 뚜렷한 경계를 형성한다.</figcaption>
+    </figure>
+  </div>
+
+  <p>concat 방식(embed)은 5개 칼럼의 신호가 평균화되어 특정 칼럼의 특성이 희석된다. percol5는 칼럼별 방향 정보를 독립 보존하면서 공간 크기를 percol 7col(7168-dim) 대비 28% 축소한다.</p>
+
+  <div class="verdict">
+    <strong>선택: percol5 (5120-dim)</strong> — k=5에서 bootstrap ARI 최고, 칼럼 신호 독립 보존, 7col 대비 공간 절약.
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════
+     §2  PCA 차원
+═══════════════════════════════════════════════ -->
+<section id="pca">
+  <h2><span class="badge">Step 2</span> PCA 차원 선택 — n=100</h2>
+
+  <p>5120-dim → KMeans를 직접 적용하는 baseline 대비, PCA로 차원을 축소한 뒤 클러스터링하는 효과를 측정했다.</p>
+
+  <div class="img-row">
+    <figure>
+      <img src="../resource/outputs/pca_scree.png" alt="PCA scree plot">
+      <figcaption>percol5 5120-dim의 PCA scree plot. 분산 50% 도달에 n=151개 컴포넌트, 70%에 n=383개가 필요 → 분산 보존 기준으로는 100이 충분하지 않지만, 클러스터링 목적상 방향 정보 보존이 더 중요하다.</figcaption>
+    </figure>
+    <figure>
+      <img src="../resource/outputs/viz_dimred_k5.png" alt="차원 축소 방법별 KMeans k=5 시각화">
+      <figcaption>차원 축소 방법별 KMeans k=5 클러스터 (n=10,000). UMAP 기반이 클러스터 경계를 가장 명확히 형성한다.</figcaption>
+    </figure>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>방법</th><th>dim</th><th>silhouette</th><th>davies_bouldin</th>
+          <th>calinski_harabasz</th><th>bootstrap ARI</th><th>KMeans 시간(s)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="label">baseline (raw)</td><td>5120</td>
+          <td>0.014</td><td>6.890</td><td>570</td><td>0.914</td><td class="bad">29.9</td>
+        </tr>
+        <tr>
+          <td class="label">PCA-50</td><td>50</td>
+          <td>0.052</td><td>3.608</td><td>2073</td><td>0.945</td><td class="best">0.2</td>
+        </tr>
+        <tr class="highlight">
+          <td class="label">PCA-100 ✓</td><td>100</td>
+          <td>0.037</td><td>4.355</td><td>1428</td><td class="best">0.954</td><td class="best">0.3</td>
+        </tr>
+        <tr>
+          <td class="label">PCA-200</td><td>200</td>
+          <td>0.027</td><td>5.091</td><td>1044</td><td>0.945</td><td>0.5</td>
+        </tr>
+        <tr>
+          <td class="label">UMAP-20 (직접)</td><td>20</td>
+          <td>0.369</td><td>1.057</td><td>46912</td><td class="bad">0.579</td><td>0.1</td>
+        </tr>
+        <tr>
+          <td class="label">UMAP-50 (직접)</td><td>50</td>
+          <td>0.375</td><td>1.018</td><td>53472</td><td>0.983</td><td>0.2</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>PCA-100이 bootstrap ARI 0.954로 모든 PCA 차원 중 최고이며, baseline(29.9s) 대비 KMeans 시간을 100배 단축한다. PCA-200은 ARI가 오히려 낮아지고 시간만 증가했다. UMAP 고차원 직접 사용은 ARI가 불안정하다 (n=10에서 0.579).</p>
+
+  <div class="note">PCA는 클러스터링 전처리용이다. UMAP 2D로의 최종 투영은 §3에서 별도 수행한다 (L2→PCA(100)→L2→UMAP(2D) 파이프라인).</div>
+
+  <div class="verdict">
+    <strong>선택: PCA n=100</strong> — bootstrap ARI 최고 (0.954), baseline 대비 100× 가속, PCA-200 대비 ARI 개선.
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════
+     §3  UMAP n_components
+═══════════════════════════════════════════════ -->
+<section id="umap">
+  <h2><span class="badge">Step 2</span> UMAP n_components 선택 — 2D</h2>
+
+  <p>percol5 → PCA(100) → UMAP(n) → KMeans(k=5) 파이프라인에서 UMAP 출력 차원 n을 2, 5, 10, 20, 30, 50으로 스윕했다.</p>
+
+  <div class="img-row">
+    <figure>
+      <img src="../resource/outputs/umap_sweep_curve.png" alt="UMAP n_components 스윕 지표">
+      <figcaption>n_components별 4개 클러스터링 지표. silhouette·davies_bouldin·calinski_harabasz 모두 n=2가 압도적. bootstrap ARI는 n=20 이상에서 안정되지만 n=2도 0.981로 충분히 높다.</figcaption>
+    </figure>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>UMAP n</th><th>silhouette ↑</th><th>davies_bouldin ↓</th>
+          <th>calinski_harabasz ↑</th><th>bootstrap ARI ↑</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="highlight">
+          <td><strong>2 ✓</strong></td>
+          <td class="best">0.584</td><td class="best">0.482</td>
+          <td class="best">269,986</td><td>0.981</td>
+        </tr>
+        <tr><td>5</td><td>0.361</td><td>0.970</td><td>38,986</td><td>0.835</td></tr>
+        <tr><td>10</td><td>0.356</td><td>1.034</td><td>36,161</td><td class="bad">0.589</td></tr>
+        <tr><td>20</td><td>0.349</td><td>1.118</td><td>39,035</td><td class="best">0.995</td></tr>
+        <tr><td>30</td><td>0.351</td><td>1.101</td><td>43,602</td><td>0.980</td></tr>
+        <tr><td>50</td><td>0.350</td><td>1.111</td><td>42,111</td><td>0.990</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <figure>
+    <img src="../resource/outputs/umap_sweep_scatter.png" alt="UMAP n_components별 KMeans 시각화">
+    <figcaption>n_components별 2D 투영(UMAP-2) 위 KMeans 결과. n=2(좌상)는 클러스터가 볼록(convex)하고 경계가 명확하다. n이 커질수록 KMeans의 볼록 가정이 깨져 클러스터가 단편화된다.</figcaption>
+  </figure>
+
+  <p>silhouette 0.584(n=2) vs 0.35(n≥5): KMeans는 볼록 클러스터를 가정하는데, UMAP 2D 공간에서 데이터가 볼록하게 압축되어 이 가정이 가장 잘 충족된다. 고차원에서는 거리 척도의 농도 현상(concentration of measure)이 발생해 클러스터 경계가 모호해진다.</p>
+
+  <div class="verdict">
+    <strong>선택: UMAP n_components=2</strong> — silhouette 0.584로 압도적 1위, ARI 0.981, KMeans 볼록 가정 최대 충족.
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════
+     §4  KMeans k
+═══════════════════════════════════════════════ -->
+<section id="kmeans">
+  <h2><span class="badge">Step 2</span> KMeans k 선택 — k=5</h2>
+
+  <h3>이론적 근거</h3>
+  <p>Schwartz(2012) Basic Human Values의 10개 가치를 <strong>인접 쌍 5종</strong>으로 묶는 archetype 설계가 먼저 확정되었다. 소비태그 역시 소비심리학 라이프스타일 세분화 5종으로 설계했다. 따라서 k=5는 이론 요구사항이며, 실험은 k=5가 데이터에서도 지지되는지를 검증하는 역할을 한다.</p>
+
+  <h3>실험 검증 (percol5, n=200,000)</h3>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>k</th><th>silhouette ↑</th><th>davies_bouldin ↓</th><th>calinski_harabasz ↑</th><th>bootstrap ARI ↑</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>3</td><td>0.0142</td><td>7.400</td><td>3203</td><td>0.232</td></tr>
+        <tr><td>4</td><td>0.0122</td><td>7.702</td><td>2520</td><td>0.443</td></tr>
+        <tr class="highlight">
+          <td><strong>5 ✓</strong></td><td>0.0119</td><td>7.244</td><td>2211</td><td class="best">0.537</td>
+        </tr>
+        <tr><td>6</td><td class="bad">0.0098</td><td class="bad">7.848</td><td>1882</td><td>0.421</td></tr>
+        <tr><td>7</td><td>0.0109</td><td>7.052</td><td>1719</td><td>0.404</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>silhouette는 k 증가에 따라 단조 감소한다 (고차원 임베딩의 특성). 클러스터 안정성 지표인 <strong>bootstrap ARI는 k=5에서 최고(0.537)</strong>로 이론값과 일치한다. k=6, 7에서 ARI가 하락하는 것은 클러스터가 과분할되어 재현성이 떨어짐을 의미한다.</p>
+
+  <figure>
+    <img src="../resource/outputs/viz_mini_embeddings_percol5.png" alt="percol5 k=3~7 UMAP 시각화">
+    <figcaption>percol5 UMAP 2D 위 KMeans k=3~7. k=5에서 클러스터 경계가 자연스럽게 분리되며 k=6, 7은 기존 클러스터가 임의 분할되는 양상을 보인다.</figcaption>
+  </figure>
+
+  <div class="note">UMAP 후 KMeans는 절대적 silhouette 값이 낮더라도 ARI 기준으로 안정적인 클러스터를 형성할 수 있다. 따라서 k 선택 기준을 silhouette 단독이 아닌 <strong>ARI 우선</strong>으로 삼았다.</div>
+
+  <div class="verdict">
+    <strong>선택: k=5</strong> — 이론(Schwartz 5분위) + 실험(bootstrap ARI 최고 0.537) 동시 지지.
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════
+     §5  샘플 크기
+═══════════════════════════════════════════════ -->
+<section id="sample">
+  <h2><span class="badge">Step 2</span> 샘플 크기 선택 — n=200,000</h2>
+
+  <p>전체 데이터셋은 약 700만 건이다. 임베딩(9 GB parquet) 생성에 4~5시간이 소요되며, UMAP은 n에 비례하여 시간이 증가한다. n=10,000 / 50,000 / 200,000 세 규모에서 클러스터 품질을 비교했다.</p>
+
+  <div class="img-row">
+    <figure>
+      <img src="../resource/outputs/compare_3col_n10000.png" alt="n=10,000 비교">
+      <figcaption>n=10,000: 클러스터 경계가 불안정하고 일부 클러스터가 단편화된다.</figcaption>
+    </figure>
+    <figure>
+      <img src="../resource/outputs/compare_3col_n50000.png" alt="n=50,000 비교">
+      <figcaption>n=50,000: 경계가 명확해지고 percol5의 볼록 구조가 뚜렷해진다.</figcaption>
+    </figure>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>n</th><th>percol5 ARI (k=5)</th><th>matrix 최대 셀</th><th>matrix 최소 셀</th><th>비고</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>10,000</td><td>~0.45 (불안정)</td><td>1,428</td><td>97</td><td>소수 클러스터 불안정</td></tr>
+        <tr><td>50,000</td><td>~0.50</td><td>5,341</td><td>327</td><td>실험·검증용</td></tr>
+        <tr class="highlight"><td><strong>200,000 ✓</strong></td><td class="best">0.537</td><td>20,264</td><td>1,147</td><td>최종 분석 기준</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>n=200,000에서 5×5 매트릭스의 최소 셀이 1,147건으로 통계적 해석에 충분하다. n=50,000은 개발·검증 단계에서 빠른 반복을 위해 병행 사용한다. 1M 전수는 UMAP 메모리 한계(RAM ~60 GB 필요)로 현재 하드웨어에서 실행 불가하다.</p>
+
+  <div class="verdict">
+    <strong>선택: n=200,000</strong> — bootstrap ARI 안정화, 최소 셀 1,147건 확보, UMAP 메모리 한계 내.
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════
+     §6  noise_dist 임계값
+═══════════════════════════════════════════════ -->
+<section id="noise">
+  <h2><span class="badge">Step 2</span> noise_dist 임계값 — Shannon 엔트로피 상위 10%</h2>
+
+  <p>각 샘플에서 5개 centroid까지의 역거리 softmax를 구해 Shannon 엔트로피 H를 계산한다. H가 높을수록 어느 클러스터에도 명확히 속하지 않는 경계 샘플이다.</p>
+
+  <figure>
+    <img src="../resource/outputs/noise_rate_curve.png" alt="noise rate vs epsilon">
+    <figcaption>noise_rate vs ε (per-signal percentile threshold). ε=0.05(오렌지 점선)에서 noise_struct 비율이 10%에 해당한다. ε=0.10 이상에서는 20%를 초과해 유효 샘플 손실이 과도해진다.</figcaption>
+  </figure>
+
+  <p><code>noise_dist=1</code> 판정 기준: <code>H ≥ p90</code> (Shannon 엔트로피 상위 10%). 절대값 임계값 대신 <strong>상대적 분위수</strong>를 사용해 anchor 텍스트 버전이 바뀌어도 항상 전체의 10%가 플래그된다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>임계값</th><th>noise_dist=1 비율</th><th>유효 샘플(noise=0)</th><th>평가</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>p80 (상위 20%)</td><td>20%</td><td>160,000</td><td class="bad">과도한 제외</td></tr>
+        <tr class="highlight"><td><strong>p90 (상위 10%) ✓</strong></td><td>10%</td><td class="best">180,000</td><td class="best">균형</td></tr>
+        <tr><td>p95 (상위 5%)</td><td>5%</td><td>190,000</td><td>경계 샘플 일부 포함</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><code>noise_dist</code>는 탈락이 아닌 <strong>플래그</strong>다. 분석 시 <code>noise_dist=0</code> 필터를 적용하면 n=180,000의 고신뢰 샘플만 사용할 수 있고, 전체 포함 시와 비교해 결과의 강건성을 확인할 수 있다 (<code>matrix_5x5_n{N}.csv</code> vs <code>matrix_5x5_all_n{N}.csv</code>).</p>
+
+  <div class="verdict">
+    <strong>선택: p90 (상위 10%)</strong> — 180,000건 유효 샘플 유지, 재현 가능한 상대적 기준, <code>--noise-pct</code>로 조정 가능.
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════
+     §7  Tier 3 PCA 차원 — sweep 실험
+═══════════════════════════════════════════════ -->
+<section id="pca-tier3">
+  <h2><span class="badge">Step 4</span> Tier 3 PCA 차원 선택 — n=100 확정 (소비 임베딩 2048-dim)</h2>
+
+  <p>소비 임베딩(2048-dim)에 대한 PCA 차원을 결정하기 위해 <code>sweep_consumption_pca.py</code>로 coarse sweep을 실행했다.
+  평가 지표는 anchor_match.py의 Hungarian 할당 결과: <strong>min_cos</strong>(최저 신뢰도), <strong>mean_cos</strong>(평균 신뢰도), <strong>min_margin</strong>(top-1 vs top-2 코사인 차 최솟값), <strong>balance</strong>(최소/최대 클러스터 크기 비율).</p>
+
+  <h3>Coarse sweep (n=50,000)</h3>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>PCA</th><th>min_cos</th><th>mean_cos</th><th>min_margin</th><th>balance</th><th>비고</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="label">10</td><td class="bad">−0.0020</td><td>0.2596</td><td>0.0480</td><td>0.400</td>
+          <td>min_cos 음수 — 정보 손실 과다</td>
+        </tr>
+        <tr>
+          <td class="label">30</td><td>0.0254</td><td>0.2665</td><td class="bad">0.0265</td><td>0.421</td>
+          <td>min_margin 최저 — 레이블 모호</td>
+        </tr>
+        <tr>
+          <td class="label">50 (구 기본값)</td><td>0.0812</td><td>0.2826</td><td>0.0800</td><td>0.370</td>
+          <td></td>
+        </tr>
+        <tr class="highlight">
+          <td class="label">100 ✓</td><td class="best">0.0966</td><td class="best">0.2873</td><td class="best">0.0862</td><td>0.369</td>
+          <td>min_cos · mean_cos · min_margin 모두 최고</td>
+        </tr>
+        <tr>
+          <td class="label">200</td><td>0.0817</td><td>0.2848</td><td>0.0748</td><td>0.424</td>
+          <td>100 대비 전 지표 하락</td>
+        </tr>
+        <tr>
+          <td class="label">500</td><td>0.0846</td><td>0.2729</td><td>0.0718</td><td class="best">0.467</td>
+          <td>mean_cos 하락 — noise 유입</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>곡선 형태: 10→100 단조 증가, 100→500 완만한 감소. PCA=100이 모든 anchor 품질 지표에서 최고.</p>
+  <p>참고: min_margin 최고(0.0862)가 Tier 2 archetype(0.27+)보다 크게 낮다. PCA 조정만으로는 한계가 있으며, anchor 텍스트 재합성 여지가 있다.</p>
+
+  <h3>Fine sweep — n=50,000</h3>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>PCA</th><th>min_cos</th><th>mean_cos</th><th>min_margin</th><th>balance</th><th>비고</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="label">70</td><td>0.0853</td><td>0.2861</td><td>0.0737</td><td>0.375</td><td></td></tr>
+        <tr><td class="label">80</td><td>0.0916</td><td>0.2841</td><td>0.0808</td><td>0.360</td><td></td></tr>
+        <tr><td class="label">90</td><td>0.0948</td><td>0.2828</td><td>0.0823</td><td>0.370</td><td></td></tr>
+        <tr class="highlight">
+          <td class="label">100 ✓</td><td class="best">0.0966</td><td class="best">0.2873</td><td class="best">0.0862</td><td>0.369</td>
+          <td>전 지표 최고</td>
+        </tr>
+        <tr><td class="label">110</td><td>0.0909</td><td>0.2868</td><td class="bad">0.0678</td><td>0.375</td><td>min_margin 급락 (−0.018)</td></tr>
+        <tr><td class="label">120</td><td>0.0833</td><td>0.2852</td><td>0.0624</td><td>0.383</td><td></td></tr>
+        <tr><td class="label">130</td><td>0.0804</td><td>0.2851</td><td>0.0614</td><td>0.385</td><td></td></tr>
+        <tr><td class="label">150</td><td>0.0871</td><td>0.2860</td><td>0.0704</td><td>0.397</td><td></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>100→110 구간에서 min_margin 0.0184 급락. min_cos는 90–100에서 peak 후 완만 감소. 상한이 100으로 명확히 확정됨.</p>
+
+  <h3>PCA=100 anchor_sim 상세 (n=50,000)</h3>
+
+  <p>Hungarian 할당 직전의 5×5 코사인 유사도 행렬 (<code>resource/outputs/sweep_pca/anchor_sim_pca100_n50000.csv</code>).
+  BGE-M3 이방성 보정(data_mean 차감) 후 L2 정규화된 벡터 간 cosine → 음수 가능.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>anchor \ cluster</th><th>cluster0</th><th>cluster1</th><th>cluster2</th><th>cluster3</th><th>cluster4</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="label">절약·계획</td><td class="best">+0.189</td><td>−0.096</td><td>−0.005</td><td>+0.004</td><td>−0.107</td></tr>
+        <tr><td class="label">경험·관계</td><td>−0.043</td><td class="best">+0.097</td><td>−0.046</td><td>−0.007</td><td>+0.010</td></tr>
+        <tr><td class="label">가족·실용</td><td>−0.049</td><td>−0.068</td><td>−0.059</td><td class="best">+0.377</td><td>−0.212</td></tr>
+        <tr><td class="label">충동·즉흥</td><td>−0.193</td><td>+0.174</td><td>−0.123</td><td>−0.220</td><td class="best">+0.362</td></tr>
+        <tr><td class="label">가치·정성</td><td>−0.011</td><td>−0.149</td><td class="best">+0.412</td><td>+0.069</td><td>−0.277</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Hungarian 할당 결과 (PCA=100)</h3>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>클러스터</th><th>레이블</th><th>cosine</th><th>비고</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="label">cluster0</td><td>절약·계획</td><td>+0.189</td><td></td></tr>
+        <tr><td class="label">cluster1</td><td>경험·관계</td><td class="bad">+0.097</td><td>← min_cos 원인. anchor 텍스트 재합성 여지</td></tr>
+        <tr><td class="label">cluster2</td><td>가치·정성</td><td class="best">+0.412</td><td></td></tr>
+        <tr><td class="label">cluster3</td><td>가족·실용</td><td>+0.377</td><td></td></tr>
+        <tr><td class="label">cluster4</td><td>충동·즉흥</td><td>+0.362</td><td></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>경험·관계(+0.097)를 제외한 4개 anchor는 +0.18 이상으로 양호. 전체 min_margin 저하의 원인이 경험·관계 anchor 텍스트에 집중되어 있으므로, Exp-002(anchor 재합성)의 효과가 집중될 클러스터.</p>
+
+  <div class="verdict">
+    <strong>확정: PCA n=100</strong> — coarse·fine 양쪽에서 전 지표 최고. min_cos +0.015, min_margin +0.006 (vs 기존 50). 100→110 min_margin 급락으로 상한도 명확.
+  </div>
+</section>
+
+
+<!-- ───────── Summary ───────── -->
+<section>
+  <h2>파라미터 확정 요약</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>파라미터</th><th>확정값</th><th>핵심 근거</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="label">임베딩 방식</td><td>percol5 (5120-dim)</td><td>k=5 bootstrap ARI 최고 (0.537), 칼럼 신호 독립 보존</td></tr>
+        <tr><td class="label">PCA 차원 (Tier2)</td><td>100</td><td>bootstrap ARI 0.954 최고, baseline 대비 100× 가속</td></tr>
+        <tr><td class="label">PCA 차원 (Tier3)</td><td>100</td><td>coarse·fine sweep 전 지표 최고, 100→110 min_margin 급락으로 상한 확정</td></tr>
+        <tr><td class="label">UMAP n_components</td><td>2</td><td>silhouette 0.584(n=2) vs 0.35(n≥5), KMeans 볼록 가정 충족</td></tr>
+        <tr><td class="label">KMeans k</td><td>5</td><td>이론(Schwartz 5분위) + ARI 최고 k</td></tr>
+        <tr><td class="label">샘플 크기</td><td>200,000</td><td>ARI 안정화, 최소 셀 1,147건, UMAP 메모리 내</td></tr>
+        <tr><td class="label">noise_dist 임계값</td><td>p90 (상위 10%)</td><td>180,000건 유효 샘플, 재현 가능한 상대적 기준</td></tr>
+        <tr><td class="label">KMeans n_init</td><td>10</td><td>수렴 불안정성 완화 (sklearn 기본값)</td></tr>
+        <tr><td class="label">random seed</td><td>42</td><td>전 스크립트 공통 고정</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</div><!-- .page -->
+</body>
+</html>

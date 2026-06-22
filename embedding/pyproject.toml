@@ -1,0 +1,29 @@
+[project]
+name = "aio-persona"
+version = "0.1.0"
+description = "AIO 기반 소비 페르소나 클러스터링 파이프라인"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "datasets",
+    "transformers",
+    "FlagEmbedding",
+    "scikit-learn",
+    "torch",
+    "umap-learn>=0.5.12",
+    "matplotlib>=3.10.9",
+    "faiss-cpu>=1.9",
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu130" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
